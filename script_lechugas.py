@@ -37,7 +37,9 @@ def recortar_lechugas_optimizado(imagen_path, output_dir="lechugas_recortadas", 
     else:
         # Parámetros por defecto
         params = {
-            'lower_green': np.array([25, 100, 80]),
+            # og 'lower_green': np.array([25, 100, 80]),
+            'lower_green': np.array([30, 120, 100]),
+            # og 'upper_green': np.array([37, 255, 192]),
             'upper_green': np.array([37, 255, 192]),
             'min_area': 50,
             'max_area': 1100
