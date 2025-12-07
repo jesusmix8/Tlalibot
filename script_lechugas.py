@@ -71,7 +71,6 @@ def optimizar_parametros(img):
                         len(s_min_range) * len(v_min_range) * 
                         len(min_area_range) * len(max_area_range))
     
-    print(f"Probando {total_iteraciones} combinaciones de parámetros...")
     iteracion = 0
     
     # Iterar sobre combinaciones
@@ -83,9 +82,7 @@ def optimizar_parametros(img):
             continue
         
         iteracion += 1
-        if iteracion % 100 == 0:
-            print(f"  Progreso: {iteracion}/{total_iteraciones} ({iteracion*100//total_iteraciones}%)")
-        
+
         # Crear parámetros de prueba
         params = {
             'lower_green': np.array([h_min, s_min, v_min]),
@@ -104,7 +101,6 @@ def optimizar_parametros(img):
             mejor_config['upper_green'] = params['upper_green']
             mejor_config['min_area'] = params['min_area']
             mejor_config['max_area'] = params['max_area']
-            print(f"  ✓ Nueva mejor configuración: {count} lechugas detectadas")
     
     return mejor_config
 
@@ -177,6 +173,20 @@ def detectar_y_recortar(img, params, output_dir):
             })
         
     return lechugas_recortadas
+
+def dibujar_lechugas(imagen_path, lista):
+    img = cv2.imread(imagen_path)
+
+    for l in lista:
+        x, y = l["posicion"]
+        w, h = l["tamaño"]
+
+        cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
+        cv2.putText(img, f"#{l['id']}", (x, y - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+    return img
+
 
 
 if __name__ == "__main__":

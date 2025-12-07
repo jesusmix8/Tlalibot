@@ -9,8 +9,10 @@ import json
 import socket
 import threading
 from streamlit_autorefresh import st_autorefresh
+from collections import deque
 
-st_autorefresh(interval=1000)
+# Actualizar cada 2 segundos
+st_autorefresh(interval=2000, key="datarefresh")
 
 # ============================================
 # CLIENTE DE DATOS - INTEGRADO
@@ -23,6 +25,7 @@ class ClienteDatos:
         self.conectado = False
         self.ultimo_dato = None
         self.callbacks = []
+        self.intentando_reconectar = False
         
         self.conectar()
     
@@ -30,8 +33,10 @@ class ClienteDatos:
         """Conecta al servidor de datos"""
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.socket.settimeout(5)  # Timeout de 5 segundos
             self.socket.connect((self.host, self.puerto))
             self.conectado = True
+            self.intentando_reconectar = False
             
             # Iniciar thread de lectura
             thread = threading.Thread(target=self.leer_datos, daemon=True)
@@ -63,11 +68,23 @@ class ClienteDatos:
                             pass
             except Exception as e:
                 self.conectado = False
-                time.sleep(2)
-                try:
-                    self.conectar()
-                except:
-                    pass
+                break
+        
+        # Intentar reconectar
+        if not self.intentando_reconectar:
+            self.intentando_reconectar = True
+            threading.Thread(target=self.reconectar, daemon=True).start()
+    
+    def reconectar(self):
+        """Intenta reconectar al servidor"""
+        while self.intentando_reconectar:
+            time.sleep(3)
+            try:
+                self.conectar()
+                print("✔ Reconectado al servidor")
+                break
+            except:
+                print("⏳ Intentando reconectar...")
     
     def obtener_datos(self):
         """Retorna el último dato recibido"""
@@ -80,11 +97,16 @@ class ClienteDatos:
     def desconectar(self):
         """Cierra la conexión"""
         self.conectado = False
+        self.intentando_reconectar = False
         if self.socket:
             try:
                 self.socket.close()
             except:
                 pass
+
+# ============================================
+# INICIALIZACIÓN
+# ============================================
 
 # Conectar al servidor de datos compartido
 if "cliente_datos" not in st.session_state:
@@ -95,8 +117,27 @@ if "cliente_datos" not in st.session_state:
         st.session_state.cliente_datos = None
         st.session_state.serial_error = f"No se pudo conectar al servidor de datos: {e}"
 
+# Buffer de datos históricos en memoria (últimos 50 registros)
+if "datos_historicos" not in st.session_state:
+    st.session_state.datos_historicos = deque(maxlen=50)
+
+# Inicializar último tiempo de actualización
+if "ultimo_tiempo" not in st.session_state:
+    st.session_state.ultimo_tiempo = None
+
+def agregar_dato_historico(temp, hum, lechugas):
+    """Agrega un nuevo dato al historial"""
+    timestamp = datetime.now()
+    st.session_state.datos_historicos.append({
+        'timestamp': timestamp,
+        'temperatura': temp,
+        'humedad': hum,
+        'lechugas': lechugas
+    })
+    st.session_state.ultimo_tiempo = timestamp
+
 def obtener_datos_reales():
-    """Lee datos del servidor compartido"""
+    """Lee datos del servidor compartido y actualiza historial"""
     if st.session_state.cliente_datos is None or st.session_state.serial_error:
         return None, None
     
@@ -112,12 +153,35 @@ def obtener_datos_reales():
             if hum is not None:
                 st.session_state.hum_actual = hum
             
+            # Agregar al historial si han pasado al menos 2 segundos
+            if temp is not None and hum is not None:
+                ahora = datetime.now()
+                if (st.session_state.ultimo_tiempo is None or 
+                    (ahora - st.session_state.ultimo_tiempo).total_seconds() >= 2):
+                    lechugas = st.session_state.get('lechugas_actual', 435)
+                    agregar_dato_historico(temp, hum, lechugas)
+            
             return temp, hum
     except Exception as e:
         st.session_state.serial_error = f"Error leyendo datos: {e}"
     
     # Retornar último valor guardado si no hay datos nuevos
     return st.session_state.get("temp_actual"), st.session_state.get("hum_actual")
+
+def obtener_dataframe_historico():
+    """Convierte el buffer de datos históricos en DataFrame"""
+    if len(st.session_state.datos_historicos) > 0:
+        return pd.DataFrame(list(st.session_state.datos_historicos))
+    else:
+        # Datos de ejemplo iniciales
+        datos_ejemplo = [
+            {'timestamp': datetime.now() - timedelta(minutes=i*2), 
+             'temperatura': 21.0 + i*0.2, 
+             'humedad': 38.0 + i*1.5,
+             'lechugas': 434}
+            for i in range(10, 0, -1)
+        ]
+        return pd.DataFrame(datos_ejemplo)
 
 # Configuración de la página
 st.set_page_config(
@@ -127,7 +191,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado para diseño moderno
+# CSS personalizado
 st.markdown("""
 <style>
     .main {
@@ -212,6 +276,17 @@ st.markdown("""
         border-radius: 20px;
         box-shadow: 0 10px 40px rgba(0,0,0,0.1);
     }
+    
+    .realtime-badge {
+        display: inline-block;
+        background: #ff4757;
+        color: white;
+        padding: 5px 15px;
+        border-radius: 20px;
+        font-size: 12px;
+        font-weight: bold;
+        animation: pulse 2s infinite;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -225,27 +300,12 @@ TEMP_MAX = 26.0
 HUMEDAD_MIN = 35.0
 HUMEDAD_MAX = 50.0
 
-# Datos de ejemplo
-def obtener_datos():
-    """Simula la obtención de datos de tu base de datos SQLite"""
-    datos = [
-        (1, '2025-11-21 18:38:44', 434, 21.0, 38.0),
-        (2, '2025-11-21 18:40:27', 434, 21.8, 43.0),
-        (3, '2025-11-21 18:42:26', 434, 21.4, 38.0),
-        (4, '2025-11-21 18:45:02', 434, 21.0, 38.0),
-        (5, '2025-11-21 18:47:19', 434, 21.0, 39.0),
-        (6, '2025-11-21 18:49:30', 435, 22.5, 42.0),
-        (7, '2025-11-21 18:51:45', 435, 23.0, 45.0),
-        (8, '2025-11-21 18:53:12', 435, 22.8, 44.0),
-    ]
-    
-    df = pd.DataFrame(datos, columns=['id', 'timestamp', 'lechugas', 'temperatura', 'humedad'])
-    df['timestamp'] = pd.to_datetime(df['timestamp'])
-    return df
-
 def verificar_alertas(temp, hum):
     """Verifica si hay alertas de temperatura o humedad"""
     alertas = []
+    
+    if temp is None or hum is None:
+        return alertas
     
     # Alertas de temperatura
     if temp < TEMP_MIN:
@@ -346,7 +406,7 @@ def dashboard_page():
     col1, col2 = st.columns([6, 1])
     with col1:
         st.markdown("# 🌱 Tlalibot - Dashboard de Lechugas")
-        st.markdown(f"**Última actualización:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        st.markdown(f"**Última actualización:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} <span class='realtime-badge'>● LIVE</span>", unsafe_allow_html=True)
     with col2:
         if st.button("Cerrar Sesión"):
             st.session_state.logged_in = False
@@ -359,21 +419,27 @@ def dashboard_page():
         st.error(f"❌ {st.session_state.serial_error}")
         st.info("💡 **Soluciones:**\n1. Asegúrate de que `serial_server.py` está corriendo\n2. Verifica que el servidor esté escuchando en puerto 5000\n3. Comprueba que el ESP32 esté conectado")
     else:
-        st.success("✅ Conectado al servidor de datos")
+        estado_conexion = "🟢 Conectado" if st.session_state.cliente_datos.conectado else "🔴 Desconectado"
+        st.success(f"✅ {estado_conexion} al servidor de datos | 📊 {len(st.session_state.datos_historicos)} registros en memoria")
     
     st.markdown("")
     
-    # Obtener datos
-    df = obtener_datos()
+    # Obtener datos en tiempo real
     temp_actual, hum_actual = obtener_datos_reales()
+    
+    # Obtener DataFrame histórico
+    df = obtener_dataframe_historico()
 
-    # Si no hay datos del sensor, usar datos de ejemplo
+    # Si no hay datos del sensor, usar últimos del historial
     if temp_actual is None or hum_actual is None:
-        st.warning("⚠ No hay datos del ESP32, usando datos de ejemplo...")
-        temp_actual = df['temperatura'].iloc[-1]
-        hum_actual = df['humedad'].iloc[-1]
+        if len(df) > 0:
+            temp_actual = df['temperatura'].iloc[-1]
+            hum_actual = df['humedad'].iloc[-1]
+        else:
+            temp_actual = 21.0
+            hum_actual = 38.0
 
-    lechugas_actual = df['lechugas'].iloc[-1]
+    lechugas_actual = st.session_state.get('lechugas_actual', 435)
     
     # Sistema de Alertas
     st.markdown("## 🔔 Sistema de Alertas")
@@ -400,7 +466,7 @@ def dashboard_page():
         st.markdown(f"""
         <div class="metric-card temp-card">
             <h3>{estado_temp} Temperatura</h3>
-            <h1 style="margin: 10px 0;">{temp_actual}°C</h1>
+            <h1 style="margin: 10px 0;">{temp_actual:.1f}°C</h1>
             <p>Rango ideal: {TEMP_MIN}°C - {TEMP_MAX}°C</p>
         </div>
         """, unsafe_allow_html=True)
@@ -410,7 +476,7 @@ def dashboard_page():
         st.markdown(f"""
         <div class="metric-card hum-card">
             <h3>{estado_hum} Humedad</h3>
-            <h1 style="margin: 10px 0;">{hum_actual}%</h1>
+            <h1 style="margin: 10px 0;">{hum_actual:.1f}%</h1>
             <p>Rango ideal: {HUMEDAD_MIN}% - {HUMEDAD_MAX}%</p>
         </div>
         """, unsafe_allow_html=True)
@@ -429,7 +495,7 @@ def dashboard_page():
     st.markdown("---")
     
     # Gráficas
-    st.markdown("## 📈 Gráficas Históricas")
+    st.markdown("## 📈 Gráficas en Tiempo Real")
     
     tab1, tab2, tab3 = st.tabs(["🌡️ Temperatura", "💧 Humedad", "🥬 Lechugas"])
     
@@ -454,7 +520,7 @@ def dashboard_page():
         ))
         
         fig_temp.update_layout(
-            title="Evolución de la Temperatura",
+            title="Evolución de la Temperatura en Tiempo Real",
             xaxis_title="Tiempo",
             yaxis_title="Temperatura (°C)",
             hovermode='x unified',
@@ -484,7 +550,7 @@ def dashboard_page():
         ))
         
         fig_hum.update_layout(
-            title="Evolución de la Humedad",
+            title="Evolución de la Humedad en Tiempo Real",
             xaxis_title="Tiempo",
             yaxis_title="Humedad (%)",
             hovermode='x unified',
@@ -503,59 +569,13 @@ def dashboard_page():
     
     st.markdown("---")
     
-    # Tabla de registros y cámara
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("## 📋 Últimos Registros")
-        df_display = df.tail(10).copy()
-        df_display['timestamp'] = df_display['timestamp'].dt.strftime('%H:%M:%S')
-        df_display = df_display[['timestamp', 'temperatura', 'humedad', 'lechugas']]
-        df_display.columns = ['Hora', 'Temp (°C)', 'Humedad (%)', 'Lechugas']
-        st.dataframe(df_display, use_container_width=True, hide_index=True)
-    
-    with col2:
-        st.markdown("## 📷 Cámara en Vivo")
-        
-        if "camera_on" not in st.session_state:
-            st.session_state.camera_on = False
-        
-        col_start, col_stop = st.columns(2)
-        
-        with col_start:
-            if st.button("▶️ Iniciar Cámara", use_container_width=True):
-                st.session_state.camera_on = True
-        
-        with col_stop:
-            if st.button("⏹️ Detener Cámara", use_container_width=True):
-                st.session_state.camera_on = False
-        
-        # Placeholder para la cámara
-        camera_placeholder = st.empty()
-        
-        if st.session_state.camera_on:
-            try:
-                cap = cv2.VideoCapture(0)
-                if not cap.isOpened():
-                    camera_placeholder.error("No se pudo acceder a la cámara")
-                else:
-                    frame_count = 0
-                    while st.session_state.camera_on and frame_count < 100:  # Límite de frames para evitar bloqueos
-                        ret, frame = cap.read()
-                        if not ret:
-                            camera_placeholder.error("Error al capturar frame")
-                            break
-                        
-                        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                        camera_placeholder.image(frame, channels="RGB", use_container_width=True)
-                        frame_count += 1
-                        time.sleep(0.03)  # ~30 FPS
-                    
-                    cap.release()
-            except Exception as e:
-                camera_placeholder.error(f"Error con la cámara: {e}")
-        else:
-            camera_placeholder.info("Haz clic en 'Iniciar Cámara' para comenzar")
+    # Tabla de registros
+    st.markdown("## 📋 Últimos Registros")
+    df_display = df.tail(15).copy()
+    df_display['timestamp'] = df_display['timestamp'].dt.strftime('%H:%M:%S')
+    df_display = df_display[['timestamp', 'temperatura', 'humedad', 'lechugas']]
+    df_display.columns = ['Hora', 'Temp (°C)', 'Humedad (%)', 'Lechugas']
+    st.dataframe(df_display, use_container_width=True, hide_index=True)
     
     # Configuración de alertas
     with st.expander("⚙️ Configurar Umbrales de Alerta"):
@@ -564,13 +584,13 @@ def dashboard_page():
         
         with col1:
             st.markdown("**🌡️ Temperatura**")
-            new_temp_min = st.slider("Temp. Mínima (°C)", 10.0, 25.0, TEMP_MIN, 0.5, key="temp_min_slider")
-            new_temp_max = st.slider("Temp. Máxima (°C)", 20.0, 35.0, TEMP_MAX, 0.5, key="temp_max_slider")
+            st.slider("Temp. Mínima (°C)", 10.0, 25.0, TEMP_MIN, 0.5, key="temp_min_slider")
+            st.slider("Temp. Máxima (°C)", 20.0, 35.0, TEMP_MAX, 0.5, key="temp_max_slider")
         
         with col2:
             st.markdown("**💧 Humedad**")
-            new_hum_min = st.slider("Humedad Mínima (%)", 20.0, 50.0, HUMEDAD_MIN, 1.0, key="hum_min_slider")
-            new_hum_max = st.slider("Humedad Máxima (%)", 40.0, 80.0, HUMEDAD_MAX, 1.0, key="hum_max_slider")
+            st.slider("Humedad Mínima (%)", 20.0, 50.0, HUMEDAD_MIN, 1.0, key="hum_min_slider")
+            st.slider("Humedad Máxima (%)", 40.0, 80.0, HUMEDAD_MAX, 1.0, key="hum_max_slider")
         
         st.info("💡 Los valores se guardan en variables de sesión. Para cambios permanentes, modifica las constantes en el código.")
 
@@ -581,8 +601,8 @@ if 'temp_actual' not in st.session_state:
     st.session_state.temp_actual = None
 if 'hum_actual' not in st.session_state:
     st.session_state.hum_actual = None
-if 'camera_on' not in st.session_state:
-    st.session_state.camera_on = False
+if 'lechugas_actual' not in st.session_state:
+    st.session_state.lechugas_actual = 435
 
 # Mostrar página correspondiente
 if st.session_state.logged_in:

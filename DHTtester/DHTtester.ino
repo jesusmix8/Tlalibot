@@ -1,4 +1,3 @@
-#include "BluetoothSerial.h"
 #include "DHT.h"
 
 #define DHTPIN 2
@@ -6,14 +5,10 @@
 
 DHT dht(DHTPIN, DHTTYPE);
 
-BluetoothSerial SerialBT;  // Bluetooth Serial
-
 void setup() {
-  Serial.begin(9600);
-  SerialBT.begin("ESP32_DHT");  // Nombre del dispositivo Bluetooth
-  
+  Serial.begin(9600);  // USB serial
   dht.begin();
-  Serial.println("Bluetooth listo. Conéctate desde la PC.");
+  Serial.println("Serial listo. Conéctate desde Python.");
 }
 
 void loop() {
@@ -25,12 +20,10 @@ void loop() {
     return;
   }
 
-  // Enviar por Bluetooth en formato JSON
   String json = "{\"temperatura\": " + String(t) +
                 ", \"humedad\": " + String(h) + "}";
 
-  SerialBT.println(json);
-  Serial.println("Enviado: " + json);
+  Serial.println(json);  // ← USB
 
-  delay(3000);  // Cada 3 segundos
+  delay(3000);
 }

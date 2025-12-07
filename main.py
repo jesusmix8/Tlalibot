@@ -1,5 +1,5 @@
 import telebot
-from Tlalibot.script_lechugas import recortar_lechugas_optimizado
+from script_lechugas import recortar_lechugas_optimizado
 from db import guardar_registro
 from cliente_datos import ClienteDatos
 import os
